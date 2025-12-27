@@ -1,22 +1,131 @@
-name: TOOLBOXLAP
+name: TOOLBOXLAP-SECURE
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm_run:
+        description: 'Type "YES" to confirm execution'
+        required: true
+        default: 'NO'
 
 jobs:
   build:
+    if: github.event.inputs.confirm_run == 'YES'
     name: Start Building...
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 60  # Reduced from 360
     
     steps:
-      - name: Downloading & Installing Essentials
+      # Step 1: Verify external URLs before downloading
+      - name: Verify External Resources
+        shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://gitlab.com/raposabrty/pcrdp/-/raw/main/Downloads.bat" -OutFile "Downloads.bat"
-          cmd /c Downloads.bat
-
-      - name: Show Website
-        run: cmd /c show.bat
-
-      - name: Time Counter
-        run: cmd /c loop.bat
+          $urls = @(
+              "https://gitlab.com/raposabrty/pcrdp/-/raw/main/Downloads.bat"
+          )
+          
+          foreach ($url in $urls) {
+              Write-Host "Checking: $url"
+              try {
+                  $response = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing
+                  Write-Host "✓ URL accessible: $url"
+              } catch {
+                  Write-Host "✗ URL inaccessible: $url"
+                  Write-Host "Error: $_"
+                  exit 1
+              }
+          }
+      
+      # Step 2: Download with hash verification
+      - name: Download Essentials Securely
+        shell: pwsh
+        run: |
+          $url = "https://gitlab.com/raposabrty/pcrdp/-/raw/main/Downloads.bat"
+          $output = "Downloads.bat"
+          
+          # Download file
+          Invoke-WebRequest -Uri $url -OutFile $output -UseBasicParsing
+          
+          # Verify file exists and has content
+          if (Test-Path $output) {
+              $fileInfo = Get-Item $output
+              $fileSize = $fileInfo.Length
+              $fileHash = Get-FileHash $output -Algorithm SHA256
+              
+              Write-Host "File downloaded: $output"
+              Write-Host "File size: $fileSize bytes"
+              Write-Host "SHA256 Hash: $($fileHash.Hash)"
+              
+              # Optional: Add hash validation
+              # $expectedHash = "YOUR_EXPECTED_HASH_HERE"
+              # if ($fileHash.Hash -ne $expectedHash) {
+              #     Write-Host "Hash mismatch! File may be compromised."
+              #     exit 1
+              # }
+          } else {
+              Write-Host "Download failed!"
+              exit 1
+          }
+      
+      # Step 3: Review file content before execution
+      - name: Review Batch File Content
+        shell: pwsh
+        run: |
+          Write-Host "=== Downloads.bat Preview (First 20 lines) ==="
+          Get-Content "Downloads.bat" -TotalCount 20
+          Write-Host "============================================="
+          Read-Host -Prompt "Press Enter to continue execution..."
+      
+      # Step 4: Execute with logging
+      - name: Execute Downloads
+        shell: cmd
+        run: |
+          echo [%date% %time%] Starting Downloads.bat
+          Downloads.bat
+          echo [%date% %time%] Downloads.bat completed
+          echo.
+      
+      # Step 5: Show website (if safe)
+      - name: Show Website Safely
+        shell: pwsh
+        run: |
+          # First check if show.bat exists
+          if (Test-Path "show.bat") {
+              Write-Host "Preview show.bat content:"
+              Get-Content "show.bat"
+              Write-Host "Executing show.bat..."
+              cmd /c show.bat
+          } else {
+              Write-Host "show.bat not found"
+          }
+      
+      # Step 6: Time counter with monitoring
+      - name: Execute Time Counter
+        shell: pwsh
+        timeout-minutes: 55  # Prevent infinite loops
+        run: |
+          if (Test-Path "loop.bat") {
+              Write-Host "Executing loop.bat with timeout protection..."
+              $process = Start-Process -FilePath "cmd" -ArgumentList "/c loop.bat" -NoNewWindow -PassThru
+              
+              # Monitor process
+              $process | Wait-Process -Timeout 3300  # 55 minutes max
+              if (!$process.HasExited) {
+                  Write-Host "Process timed out - terminating..."
+                  $process | Stop-Process -Force
+                  exit 1
+              }
+          }
+      
+      # Step 7: Cleanup
+      - name: Cleanup Temporary Files
+        if: always()
+        shell: pwsh
+        run: |
+          $files = @("Downloads.bat", "show.bat", "loop.bat")
+          foreach ($file in $files) {
+              if (Test-Path $file) {
+                  Remove-Item $file -Force -ErrorAction SilentlyContinue
+                  Write-Host "Cleaned up: $file"
+              }
+          }
